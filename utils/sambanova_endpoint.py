@@ -2,10 +2,11 @@
 
 from typing import Any, Dict, List, Optional, Union, Iterator
 import json
+import time
 import requests  # type: ignore
 import sseclient  # type: ignore
 
-from pydantic.v1 import Extra, root_validator  # type: ignore
+from pydantic import Extra, root_validator  # type: ignore
 from langchain.schema.output import GenerationChunk  # type: ignore
 from langchain.callbacks.manager import CallbackManagerForLLMRun  # type: ignore
 from langchain.llms.base import LLM  # type: ignore
@@ -13,8 +14,31 @@ from langchain.utils import get_from_dict_or_env  # type: ignore
 from langchain.callbacks.base import BaseCallbackHandler  # type: ignore
 from langchain_core.embeddings import Embeddings
 
+class EndpointHandler:
+    """
+    base class for Endpoint Handlers to enable common utility functions
+    """
 
-class SSEndpointHandler:
+    def _session_post(self, url, headers, _json, stream=False, retry=True, retries=10):
+      while True:
+        response = self.http_session.post(
+            url,
+            headers=headers,
+            json=_json,
+            stream=stream
+        )
+
+        if not retry:
+          return response
+        elif response.status_code/10 == 20:
+          return response
+        elif retries < 1:
+          return response
+
+        retries -= 1
+        time.sleep(10)
+
+class SSEndpointHandler(EndpointHandler):
     """
     SambaNova Systems Interface for SS model endpoints.
 
@@ -105,8 +129,10 @@ class SSEndpointHandler:
             data = {"inputs": input, "params": json.loads(params)}
         else:
             data = {"inputs": input}
-        response = self.http_session.post(
-            self._get_full_url(f"/predict/nlp/{project}/{endpoint}"),
+
+        url = self._get_full_url(f"/predict/nlp/{project}/{endpoint}")
+        response = self._session_post(
+            url=url,
             headers={"key": key},
             json=data,
         )
@@ -138,8 +164,8 @@ class SSEndpointHandler:
         else:
             data = {"inputs": input}
         # Streaming output
-        response = self.http_session.post(
-            self._get_full_url(f"/predict/nlp/stream/{project}/{endpoint}"),
+        response = self._session_post(
+            url=self._get_full_url(f"/predict/nlp/stream/{project}/{endpoint}"),
             headers={"key": key},
             json=data,
             stream=True,
@@ -341,7 +367,7 @@ class SambaNovaEndpoint(LLM):
             raise ValueError(f"Error raised by the inference endpoint: {e}") from e
         
         
-class SVEndpointHandler:
+class SVEndpointHandler(EndpointHandler):
     """
     SambaNova Systems Interface for Sambaverse endpoint.
 
@@ -405,6 +431,7 @@ class SVEndpointHandler:
         """
         return f"{self.host_url}{self.API_BASE_PATH}"
 
+    # what 2
     def nlp_predict(
         self,
         key: str,
@@ -443,15 +470,19 @@ class SVEndpointHandler:
             data = {"inputs": parsed_input, "params": json.loads(params)}
         else:
             data = {"inputs": parsed_input}
-        response = self.http_session.post(
-            self._get_full_url(),
+
+        url = self._get_full_url()
+
+        response = self._session_post(
+            url=url,
             headers={
                 "key": key, 
                 "Content-Type":"application/json",
                 "modelName":sambaverse_model_name
                 },
-            json=data,
+            _json=data,
         )
+
         return SVEndpointHandler._process_response(response)
 
     def nlp_predict_stream(
@@ -492,14 +523,14 @@ class SVEndpointHandler:
         else:
             data = {"inputs": parsed_input}
         # Streaming output
-        response = self.http_session.post(
-            self._get_full_url(),
+        response = self._session_post(
+            url=self._get_full_url(),
             headers={
                 "key": key, 
                 "Content-Type":"application/json",
                 "modelName":sambaverse_model_name
                 },
-            json=data,
+            _json=data,
             stream=True
         )
         for chunk in SVEndpointHandler._process_streaming_response(response):
@@ -754,7 +785,7 @@ class SambaNovaEmbeddingModel(Embeddings):
         for batch in self._iterate_over_batches(texts, batch_size):
             data = {"inputs": batch}
             response =http_session.post(
-                 url,
+                 url=url,
                  headers={"key": self.embed_api_key},
                  json=data,
                  )
